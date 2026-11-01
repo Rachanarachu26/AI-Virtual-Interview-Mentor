@@ -1,0 +1,61 @@
+# AI Virtual Interview Mentor — full stack in Docker.
+#
+#   docker compose up --build
+#
+# Then open http://localhost:8080 in Chrome.
+#
+# This bundles MySQL, so the recipient needs nothing installed except Docker.
+
+services:
+  # ---- MySQL database ----
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: ai_interview
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Exposed only for optional local inspection (host 3307 -> container 3306).
+    ports:
+      - "3307:3306"
+
+  # ---- FastAPI backend (Gemini + Whisper + MediaPipe) ----
+  backend:
+    build: ./backend
+    # Pin to amd64 so the exact same CPU-only PyTorch wheel installs everywhere:
+    # native on Intel/AMD machines and most servers, emulated on Apple Silicon
+    # (first build is slower there, but it works identically).
+    platform: linux/amd64
+    # Loads GEMINI_API_KEY, GEMINI_MODEL, JWT_SECRET_KEY, WHISPER_MODEL,
+    # evaluation weights, etc. from backend/.env.
+    env_file:
+      - ./backend/.env
+    # These OVERRIDE anything in .env so the containers talk to each other.
+    environment:
+      DATABASE_URL: mysql+pymysql://root:rootpass@db:3306/ai_interview
+      CORS_ORIGINS: http://localhost:8081,http://127.0.0.1:8081
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"   # API + docs at http://localhost:8000/docs
+    volumes:
+      # Persist the downloaded Whisper model between restarts.
+      - whisper_cache:/root/.cache
+
+  # ---- React frontend (built and served by nginx, proxies /api -> backend) ----
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8081:80"     # open the app here
+
+volumes:
+  db_data:
+  whisper_cache:
